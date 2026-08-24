@@ -1420,5 +1420,550 @@ window.showStatsV9=function(){document.getElementById("statsV9").style.display="
   setInterval(()=>{if(!document.hidden&&!syncing&&dirty.size)sync()},5000);
 })();
 </script>
+<script id="v25-quiz-resume-fix">
+(function(){
+  const DRAFT_KEY = "fireQuizInProgressV25";
 
+  // 4대 원칙 정답 키워드
+  // 순서와 어미는 상관없이 이 4개가 모두 포함되면 정답
+  const PRINCIPLE_KEYWORDS = [
+    "웃지않",
+    "큰소리",
+    "신속",
+    "안전"
+  ];
+
+  function draftRead(){
+    try{
+      return JSON.parse(
+        localStorage.getItem(DRAFT_KEY) || "null"
+      );
+    }catch(e){
+      return null;
+    }
+  }
+
+  function draftWrite(){
+    try{
+      if(!Array.isArray(quiz) || !quiz.length || !name || !date){
+        return;
+      }
+
+      const current = quiz[idx];
+
+      let currentChosen = null;
+
+      if(
+        current &&
+        Object.prototype.hasOwnProperty.call(current,"_chosen")
+      ){
+        currentChosen = current._chosen;
+      }else{
+        const essay = document.getElementById("essay");
+        if(essay){
+          currentChosen = essay.value;
+        }
+      }
+
+      const payload = {
+        version:25,
+        name:name,
+        date:date,
+        rank:rank,
+        idx:idx,
+
+        quiz:quiz.map(function(q){
+          return {
+            qi:QUESTIONS.indexOf(q),
+            chosen:
+              Object.prototype.hasOwnProperty.call(q,"_chosen")
+                ? q._chosen
+                : null
+          };
+        }),
+
+        currentChosen:currentChosen,
+
+        results:results.map(function(r){
+          return {
+            qi:QUESTIONS.indexOf(r.x),
+            chosen:r.chosen,
+            correct:!!r.correct,
+            display:r.display
+          };
+        }),
+
+        savedAt:new Date().toISOString()
+      };
+
+      localStorage.setItem(
+        DRAFT_KEY,
+        JSON.stringify(payload)
+      );
+
+    }catch(e){
+      console.warn("퀴즈 진행상태 저장 실패:",e);
+    }
+  }
+
+  function draftClear(){
+    try{
+      localStorage.removeItem(DRAFT_KEY);
+    }catch(e){}
+  }
+
+
+  /*
+   * =====================================================
+   * 4대 원칙 정답 처리
+   * =====================================================
+   *
+   * 웃지않
+   * 큰소리
+   * 신속
+   * 안전
+   *
+   * 위 4개가 모두 들어가면 순서와 관계없이 정답
+   */
+
+  window.principlesOK = function(value){
+
+    const x = norm(value);
+
+    return PRINCIPLE_KEYWORDS.every(function(keyword){
+      return x.includes(norm(keyword));
+    });
+
+  };
+
+
+  /*
+   * =====================================================
+   * 문제 화면 출력 후 진행상태 저장
+   * =====================================================
+   */
+
+  const originalRenderQ = renderQ;
+
+  window.renderQ = function(){
+
+    originalRenderQ();
+
+    setTimeout(function(){
+
+      const d = draftRead();
+
+      if(!d) return;
+
+      if(d.name !== name || d.date !== date){
+        return;
+      }
+
+      const x = quiz[idx];
+
+      if(!x) return;
+
+      let chosen = null;
+
+      if(
+        x._chosen !== undefined &&
+        x._chosen !== null
+      ){
+        chosen = x._chosen;
+
+      }else if(idx === d.idx){
+        chosen = d.currentChosen;
+      }
+
+
+      // 객관식 답변 복구
+      if(
+        x.kind === "mc" &&
+        typeof chosen === "number"
+      ){
+
+        const buttons = [
+          ...document.querySelectorAll("#answers .opt")
+        ];
+
+        const targetText = x.opts[chosen];
+
+        const btn = buttons.find(function(button){
+
+          return (
+            (button.textContent || "")
+              .replace(/^[①②③④]\s*/,"")
+              .trim()
+            === targetText
+          );
+
+        });
+
+        if(btn){
+          btn.click();
+        }
+
+      }
+
+      // 서술형 답변 복구
+      else if(
+        x.kind !== "mc" &&
+        chosen !== null &&
+        chosen !== undefined
+      ){
+
+        const essay =
+          document.getElementById("essay");
+
+        if(essay){
+
+          essay.value = String(chosen);
+
+          document.getElementById(
+            "next"
+          ).disabled = !essay.value.trim();
+
+        }
+
+      }
+
+      draftWrite();
+
+    },0);
+
+  };
+
+
+  /*
+   * =====================================================
+   * 퀴즈 시작
+   * =====================================================
+   */
+
+  const originalStartQuiz = startQuiz;
+
+  window.startQuiz = function(){
+
+    // 새 퀴즈를 시작하면 이전 진행상태 삭제
+    draftClear();
+
+    originalStartQuiz();
+
+    draftWrite();
+
+  };
+
+
+  /*
+   * =====================================================
+   * 객관식 선택할 때마다 저장
+   * =====================================================
+   */
+
+  const originalChooseMC = chooseMC;
+
+  window.chooseMC = function(btn,orig){
+
+    originalChooseMC(btn,orig);
+
+    draftWrite();
+
+  };
+
+
+  /*
+   * =====================================================
+   * 다음 문제로 넘어갈 때 저장
+   * =====================================================
+   */
+
+  const originalNextQ = nextQ;
+
+  window.nextQ = function(){
+
+    draftWrite();
+
+    originalNextQ();
+
+    draftWrite();
+
+  };
+
+
+  /*
+   * =====================================================
+   * 퀴즈 완료 시 임시 진행상태 삭제
+   * =====================================================
+   */
+
+  const originalShowResult = showResult;
+
+  window.showResult = async function(){
+
+    const result =
+      await originalShowResult();
+
+    // 정상적으로 결과까지 저장한 뒤 임시 진행상태 삭제
+    draftClear();
+
+    return result;
+
+  };
+
+
+  /*
+   * =====================================================
+   * 서술형 입력 즉시 저장
+   * =====================================================
+   */
+
+  document.addEventListener(
+    "input",
+    function(e){
+
+      if(
+        e.target &&
+        e.target.id === "essay"
+      ){
+        draftWrite();
+      }
+
+    },
+    true
+  );
+
+
+  /*
+   * =====================================================
+   * 화면 잠금 / 백그라운드 진입
+   * =====================================================
+   */
+
+  document.addEventListener(
+    "visibilitychange",
+    function(){
+
+      if(document.hidden){
+
+        draftWrite();
+
+      }
+
+    }
+  );
+
+
+  window.addEventListener(
+    "pagehide",
+    draftWrite
+  );
+
+
+  window.addEventListener(
+    "beforeunload",
+    draftWrite
+  );
+
+
+  /*
+   * =====================================================
+   * 진행 중인 퀴즈 복구
+   * =====================================================
+   */
+
+  function restoreDraft(){
+
+    const d = draftRead();
+
+    if(
+      !d ||
+      d.version !== 25 ||
+      !d.name ||
+      !d.date ||
+      !Array.isArray(d.quiz) ||
+      !d.quiz.length
+    ){
+      return;
+    }
+
+
+    const canRestore =
+      QUESTIONS &&
+      d.quiz.every(function(item){
+
+        return (
+          Number.isInteger(item.qi) &&
+          item.qi >= 0 &&
+          item.qi < QUESTIONS.length
+        );
+
+      });
+
+
+    if(!canRestore){
+
+      draftClear();
+
+      return;
+
+    }
+
+
+    setTimeout(function(){
+
+      const goResume =
+        confirm(
+          d.name +
+          "님의 진행 중인 퀴즈가 있습니다.\n\n" +
+          "이어풀까요?"
+        );
+
+
+      if(!goResume){
+
+        draftClear();
+
+        return;
+
+      }
+
+
+      try{
+
+        name = d.name;
+
+        date = d.date;
+
+        rank =
+          d.rank ||
+          getRank(date,name) ||
+          0;
+
+
+        /*
+         * 저장해둔 문제 순서 그대로 복구
+         */
+
+        quiz = d.quiz.map(function(item){
+
+          const q =
+            Object.assign(
+              {},
+              QUESTIONS[item.qi]
+            );
+
+          if(Array.isArray(q.opts)){
+            q.opts = [...q.opts];
+          }
+
+          if(
+            item.chosen !== null &&
+            item.chosen !== undefined
+          ){
+            q._chosen = item.chosen;
+          }
+
+          return q;
+
+        });
+
+
+        /*
+         * 현재 문제 위치 복구
+         */
+
+        idx =
+          Math.min(
+            Math.max(
+              Number(d.idx) || 0,
+              0
+            ),
+            quiz.length - 1
+          );
+
+
+        /*
+         * 이미 풀었던 문제들의 결과 복구
+         */
+
+        results =
+          (
+            Array.isArray(d.results)
+              ? d.results
+              : []
+          )
+          .map(function(r){
+
+            return {
+              x:QUESTIONS[r.qi],
+              chosen:r.chosen,
+              correct:!!r.correct,
+              display:r.display
+            };
+
+          })
+          .filter(function(r){
+
+            return r.x;
+
+          });
+
+
+        /*
+         * 퀴즈 화면으로 복귀
+         */
+
+        document
+          .getElementById("start")
+          .classList.add("hidden");
+
+        document
+          .getElementById("result")
+          .classList.add("hidden");
+
+        document
+          .getElementById("quiz")
+          .classList.remove("hidden");
+
+
+        renderQ();
+
+
+      }catch(e){
+
+        console.warn(
+          "퀴즈 이어풀기 복원 실패:",
+          e
+        );
+
+        draftClear();
+
+      }
+
+    },300);
+
+  }
+
+
+  /*
+   * 페이지가 열린 뒤 진행상태 확인
+   */
+
+  if(
+    document.readyState === "loading"
+  ){
+
+    document.addEventListener(
+      "DOMContentLoaded",
+      restoreDraft
+    );
+
+  }else{
+
+    restoreDraft();
+
+  }
+
+})();
+</script>
 </body></html>
